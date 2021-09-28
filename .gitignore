@@ -1,3 +1,5 @@
 
 .DS_Store
 .Rproj.user
+seurat_pbmc/pbmc_tutorial.rds
+seurat_pbmc/pbmc3k_final.rds
