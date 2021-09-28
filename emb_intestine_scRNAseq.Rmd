@@ -1,0 +1,392 @@
+---
+title: "Embryo Intestine scRNA-seq"
+author: "Robert Williams"
+date: "9/22/2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Install packages
+```{r}
+# install.packages('Seurat')
+# reticulate::py_install(packages = 'umap-learn', envname = 'r-reticulate')
+# BiocManager::install("limma")
+# install.packages("hdf5r")
+# BiocManager::install("bioMart")
+```
+
+# Load packages
+
+```{r echo=FALSE}
+library(biomaRt)
+library(Seurat)
+library(tidyverse)
+library(patchwork)
+library(limma)
+```
+
+```{r}
+emb_int.data <- Read10X_h5("./10x_cloud_analysis/GFPsort_pooled_count/raw_feature_bc_matrix.h5")
+```
+
+```{r}
+mart <- useMart("parasite_mart", dataset = "wbps_gene", host = "https://parasite.wormbase.org", port = 443)
+genes.df <- getBM(mart = mart, 
+      filters = c("species_id_1010", "wbps_gene_id"),
+      value = list("caelegprjna13758", rownames(emb_int.data)),
+      attributes = c('wbps_gene_id','external_gene_id')
+      )
+
+c(nrow(genes.df), nrow(emb_int.data))
+# there are genes missing
+nrow(emb_int.data)-nrow(genes.df)
+```
+There are `r nrow(emb_int.data)-nrow(genes.df)` genes that are now dead, remove them from the input matrix.
+
+```{r}
+emb_int.data.filt <- emb_int.data[rownames(emb_int.data) %in% genes.df$wbps_gene_id,]
+# The two datastructures do not have the same order of WBGeneIDs
+identical(rownames(emb_int.data.filt), genes.df$wbps_gene_id)
+# Use match to make sure they are in the same order
+identical(rownames(emb_int.data.filt),
+          genes.df[match(rownames(emb_int.data.filt), genes.df$wbps_gene_id),]$wbps_gene_id
+)
+# now replace the WBGeneIDs with gene names
+rownames(emb_int.data.filt) <- genes.df[
+  match(rownames(emb_int.data.filt),
+        genes.df$wbps_gene_id)
+  ,]$external_gene_id
+# are there NAs?
+sum(!is.na(rownames(emb_int.data.filt)))
+head(emb_int.data.filt)
+```
+
+
+```{r}
+emb_int <- CreateSeuratObject(counts = emb_int.data.filt, project = "emb_int_pool", min.cells = 3, min.features = 200)
+emb_int
+```
+
+
+```{r}
+
+length(unique(genes.df$wbps_gene_id))
+length(unique(rownames(emb_int)))
+# rownames(emb_int)[!(rownames(emb_int) %in% genes.df$wbps_gene_id)]
+# inspecting the gene names on wormbase shows that these genes are now considered dead, so remove them from the analysis
+emb_int
+```
+
+```{r}
+head(emb_int@meta.data, 5)
+```
+
+# TODO: Include mitochondria gene filtering
+
+- `nFeature_RNA` is the number of genes detected in each cell. 
+- nCount_RNA is the total number of molecules detected within a cell (AKA total UMIs per cell)
+- Low `nFeature_RNA` indicates that the cell may be dead or dying or an empty droplet. 
+- High `nCount_RNA` and/or `nFeature_RNA` indicates that the "cell" may in fact be a doublet (or multiplet).
+```{r}
+VlnPlot(emb_int, features = c("nFeature_RNA", "nCount_RNA"))
+```
+
+```{r}
+FeatureScatter(emb_int, feature1 = "nCount_RNA", feature2 = "nFeature_RNA")
+```
+# Filter based on features
+
+```{r}
+# emb_int <- CreateSeuratObject(counts = emb_int.data, project = "emb_int_pool", min.cells = 3, min.features = 200)
+emb_int <- subset(emb_int, subset = nFeature_RNA > 1000 & nFeature_RNA < 6000 & nCount_RNA < 50000)
+```
+
+Visualize after filtering
+```{r}
+VlnPlot(emb_int, features = c("nFeature_RNA", "nCount_RNA"))
+FeatureScatter(emb_int, feature1 = "nCount_RNA", feature2 = "nFeature_RNA")
+```
+# Normalize the data
+
+```{r}
+emb_int <- NormalizeData(emb_int, normalization.method = "LogNormalize", scale.factor = 10000)
+```
+
+# Feature selection
+
+Identify highly variable features to focus on in downstream analysis
+
+```{r}
+emb_int <- FindVariableFeatures(emb_int, selection.method = "vst", nfeatures = 2000)
+
+# Identify the 10 most highly variable genes
+top10 <- head(VariableFeatures(emb_int), 10)
+
+# plot variable features with and without labels
+plot1 <- VariableFeaturePlot(emb_int)
+LabelPoints(plot = plot1, points = top10, repel = TRUE)
+```
+
+# Normalization
+
+```{r}
+all.genes <- rownames(emb_int)
+# center and scale
+emb_int <- ScaleData(emb_int, features = all.genes)
+# PCA linear dimentionality reduction
+emb_int <- RunPCA(emb_int, features = VariableFeatures(object = emb_int))
+```
+
+```{r}
+print(emb_int[["pca"]], dims = 1:5, nfeatures = 5)
+```
+
+```{r}
+VizDimLoadings(emb_int, dims = 1:2, reduction = "pca")
+```
+```{r}
+DimPlot(emb_int, reduction = "pca")
+```
+```{r}
+DimHeatmap(emb_int, dims = 1, cells = 500, balanced = TRUE)
+```
+```{r}
+DimHeatmap(emb_int, dims = 1:6, cells = 500, balanced = TRUE)
+```
+# Determine dataset dimensionality
+
+```{r}
+emb_int <- JackStraw(emb_int, num.replicate = 100)
+emb_int <- ScoreJackStraw(emb_int, dims = 1:20)
+```
+
+```{r}
+JackStrawPlot(emb_int, dims = 1:15)
+```
+```{r}
+ElbowPlot(emb_int)
+```
+# Cell clustering
+Choosing 10 PCs
+```{r}
+emb_int <- FindNeighbors(emb_int, dims = 1:10)
+emb_int <- FindClusters(emb_int, resolution = 0.5)
+# Look at cluster IDs of the first 5 cells
+head(Idents(emb_int), 5)
+```
+```{r}
+emb_int <- RunUMAP(emb_int, dims = 1:10)
+DimPlot(emb_int, reduction = "umap", label = "TRUE", label.box = TRUE)
+```
+
+```{r}
+emb_int <- RunTSNE(emb_int, dims = 1:10)
+DimPlot(emb_int, reduction = "tsne", label = TRUE, label.box = TRUE)
+```
+```{r}
+FeaturePlot(emb_int, features = c("elt-2", "elt-7", "end-1", "end-3", "med-2", "pqm-1","pho-1", "itr-1", "elt-4"))
+```
+```{r}
+FeaturePlot(emb_int, features = c("elt-2", "elt-7","end-1", "ges-1","pho-1", "itr-1", "act-5", "ifb-2", "erm-1"))
+```
+```{r}
+FeaturePlot(emb_int, features = c("ric-4", "ajm-1", "cdf-1", "myo-3", "myo-2", "unc-11", "inx-10"))
+```
+
+```{r}
+print(emb_int[["pca"]], dims = 7, nfeatures = 5)
+FeaturePlot(emb_int, features = c("tba-2", "ctsa-1.2", "clec-37"))
+```
+# Find marker genes
+
+```{r}
+emb_int.markers <- FindAllMarkers(emb_int, only.pos = TRUE, min.pct = 0.25, logfc.threshold = 0.25)
+emb_int.markers %>% 
+  group_by(cluster) %>%
+  slice_max(n = 2, order_by = avg_log2FC)
+```
+```{r}
+FeaturePlot(emb_int, features = (
+  emb_int.markers %>% 
+  group_by(cluster) %>%
+  slice_max(n = 1, order_by = avg_log2FC))$gene
+  )
+```
+# Perform gene ontology
+```{r}
+library(reticulate)
+use_condaenv("kw_fig5", required = TRUE)
+tea <- import("tissue_enrichment_analysis")
+tissue_df <- tea$fetch_dictionary("tissue")
+phenotype_df <- tea$fetch_dictionary("phenotype")
+go_df <- tea$fetch_dictionary("go")
+```
+
+```{r}
+emb_int.markers <- emb_int.markers %>% left_join(genes.df, by = c("gene" = "external_gene_id")) 
+emb_int.markers <- emb_int.markers %>% rename(WBGeneID = wbps_gene_id)
+```
+
+```{r}
+clusters <- unique(emb_int.markers$cluster)
+my_tea_analysis <- function(input_df, tea_dict){
+  tea_df <- data.frame()
+  for (i in clusters){
+  tea_set <- tea$enrichment_analysis(
+    (input_df %>% 
+       filter(cluster == i))$WBGeneID, 
+    tissue_df = tea_dict 
+    # %>% 
+    #   filter(wbid %in% (input_df %>% 
+    #                       filter(cluster %in% clusters))$WBGeneID)
+  )
+  if(nrow(tea_set) == 0){
+    next
+  } else {
+  tea_df <- bind_rows(tea_df, data.frame(tea_set, cluster = i))
+  }
+}
+tea_df
+}
+
+reorder_within <- function(x, by, within, fun = mean, sep = "___", ...) {
+    new_x <- paste(x, within, sep = sep)
+    stats::reorder(new_x, by, FUN = fun)
+}
+scale_x_reordered <- function(..., sep = "___") {
+    reg <- paste0(sep, ".+$")
+    ggplot2::scale_x_discrete(labels = function(x) gsub(reg, "", x), ...)
+}
+my_ontology_plot <- function(input_df, xlabel){
+  input_df %>%
+  filter(Q.value < 0.001,  Observed > 50) %>% 
+  ggplot(aes(x = reorder_within(Term, -log10(Q.value), cluster), y = -log10(Q.value))) +
+  geom_point(aes(size = Observed)) +
+  coord_flip() +
+  scale_x_reordered() +
+  facet_grid(cluster~., scales = "free_y") +
+  theme_bw() +
+  xlab(xlabel) +
+  guides(size = guide_legend(title = "# genes")) +
+  scale_size_continuous(breaks = c(20,100,200))
+}
+```
+
+
+```{r fig.height=15, fig.width=5}
+my_ontology_plot(my_tea_analysis(emb_int.markers %>% filter(p_val_adj < 0.05, avg_log2FC > 0.5), tissue_df), 
+                 "Tissue Ontology")
+```
+
+```{r fig.width = 5, fig.height=15}
+my_ontology_plot(my_tea_analysis(emb_int.markers %>% filter(p_val_adj < 0.05, avg_log2FC > 0.25), tissue_df), 
+                 "Tissue Ontology")
+```
+
+# Remove cluster 6 and 7
+
+```{r}
+DimPlot(emb_int_subset, reduction = "pca")
+
+emb_int_subset <- CreateSeuratObject(counts = emb_int.data.filt, project = "emb_int_pool", min.cells = 3, min.features = 200)
+emb_int_subset <- subset(emb_int_subset, 
+                         subset = nFeature_RNA > 1000 & nFeature_RNA < 6000 & nCount_RNA < 50000,
+                         cells = colnames(subset(emb_int, idents = 6:7, invert = TRUE)))
+emb_int_subset <- NormalizeData(emb_int_subset, normalization.method = "LogNormalize", scale.factor = 10000)
+emb_int_subset <- FindVariableFeatures(emb_int_subset, selection.method = "vst", nfeatures = 2000)
+top10 <- head(VariableFeatures(emb_int_subset), 10)
+plot1 <- VariableFeaturePlot(emb_int_subset)
+LabelPoints(plot = plot1, points = top10, repel = TRUE)
+```
+
+```{r}
+int.filt.genes <- rownames(emb_int_subset)
+emb_int_subset <- ScaleData(emb_int_subset, features = int.filt.genes)
+emb_int_subset <- RunPCA(emb_int_subset, features = VariableFeatures(object = emb_int_subset))
+DimPlot(emb_int_subset, reduction = "pca")
+```
+```{r}
+ElbowPlot(emb_int_subset)
+```
+```{r}
+emb_int_subset <- FindNeighbors(emb_int_subset, dims = 1:10)
+emb_int_subset <- FindClusters(emb_int_subset, resolution = 0.5)
+```
+
+```{r}
+emb_int_subset <- RunUMAP(emb_int_subset, dims = 1:6)
+```
+
+```{r fig.width=5, fig.height=4}
+DimPlot(emb_int_subset, reduction = "umap", label = TRUE, label.box = TRUE)
+# pdf(file = "./plots/embryo_intestine_labeled_umap.pdf", width = 5, height = 4)
+# DimPlot(emb_int_subset, reduction = "umap", label = TRUE, label.box = TRUE)
+# dev.off()
+```
+
+```{r fig.width=8, fig.height=6}
+FeaturePlot(emb_int_subset, 
+            pt.size = 0.1,
+            features = c("elt-2", "elt-7","end-1", "ges-1","pho-1", "itr-1", "act-5", "ifb-2", "erm-1"))
+# pdf(file = "./plots/embryo_intestine_genes_umap.pdf", width = 8, height = 6)
+# FeaturePlot(emb_int_subset, 
+#             pt.size = 0.1,
+#             features = c("elt-2", "elt-7","end-1", "ges-1","pho-1", "itr-1", "act-5", "ifb-2", "erm-1"))
+# dev.off()
+```
+```{r}
+emb_int_subset.markers <- FindAllMarkers(emb_int_subset, only.pos = TRUE, min.pct = 0.25, logfc.threshold = 0.25)
+head(emb_int_subset.markers)
+```
+```{r}
+FeaturePlot(emb_int_subset, pt.size = 0.1, 
+            features = (emb_int_subset.markers %>% 
+              filter(cluster == "1") %>% 
+              slice_max(n = 6, order_by = avg_log2FC))$gene
+              )
+```
+```{r}
+wTF3.0 <- read.delim(file = "../kw-onish-elt-2/L1_Expression_Comparison/Figure_4_L1_Regulation/01_input/TF3-0_namesonly.txt", sep = "\t", header = TRUE) %>% select(Sequence.name:DBD)
+
+wTF3.0 %>% filter(Public_name %in% emb_int_subset.markers$gene)
+emb_int_subset.markers %>% 
+  filter(gene %in% wTF3.0$Public_name) %>% 
+  group_by(cluster) %>%
+  arrange(desc(avg_log2FC), .by_group = TRUE) %>%
+  View
+```
+
+```{r ffig.width=8, fig.height=6}
+FeaturePlot(emb_int_subset, pt.size = 0.1,
+            features = (emb_int_subset.markers %>% 
+  filter(gene %in% wTF3.0$Public_name) %>% 
+  group_by(cluster) %>%
+  slice_max(n = 1, order_by = avg_log2FC))$gene
+)
+```
+
+```{r}
+FeaturePlot(emb_int_subset, pt.size = 0.1, features = c("skn-1", "blmp-1"))
+```
+```{r}
+FeaturePlot(emb_int_subset, pt.size = 0.1,
+            features = (emb_int_subset.markers %>% 
+  filter(gene %in% wTF3.0$Public_name, cluster == "5") %>% 
+  slice_max(n = 10, order_by = avg_log2FC))$gene
+)
+```
+```{r}
+FeaturePlot(emb_int_subset, pt.size = 1, 
+            features = c("elt-2", "elt-7", #elts
+                         "F26A10.2", "gei-13", # cluster 1
+                         "elt-3", "bcl-11", # cluster 2
+                         "ceh-37", "ZC204.12", # cluster 3
+                         "ZK1320.3", "ztf-18", # cluster 4
+                         "alr-1"
+                         )
+            )
+```
+
