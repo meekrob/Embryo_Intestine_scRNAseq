@@ -1,0 +1,84 @@
+---
+title: "Embryo Intestine scRNA-seq"
+author: "Robert Williams and David King"
+date: "10/21/2021"
+output: html_document
+---
+
+Following: https://biocellgen-public.svi.edu.au/mig_2019_scrnaseq-workshop/public/comparing-and-combining-scrna-seq-datasets.html
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+options(max.print=100)
+```
+
+```{r libraries-packages}
+library(Seurat)
+library(scmap)
+library(biomaRt)
+library(SingleCellExperiment)
+```
+
+```{r data}
+rob=readRDS("emb_int.rds")
+cengen.seurat=readRDS("~/work/cengen/100720_L4_all_cells_Seurat.rds")
+DimPlot(cengen.seurat, reduction="umap", label = F)
+cengen=as.SingleCellExperiment(cengen.seurat)
+rob=as.SingleCellExperiment(rob)
+
+# get cengen is in WBGene, need gene names to match to Rob's from https://parasite.wormbase.org/biomart/martview
+mart <- useMart("parasite_mart", dataset = "wbps_gene", host = "https://parasite.wormbase.org", port = 443)
+WBGeneToName <- getBM(mart = mart, 
+      filters = "wbps_gene_id",
+      value =  rownames(cengen),
+      attributes = c('wbps_gene_id','external_gene_id')
+      )
+rownames(WBGeneToName) <- WBGeneToName[[1]]
+rowData(cengen)$feature_symbol = WBGeneToName[ rownames(cengen), 2]
+rowData(rob)$feature_symbol <- rownames(rob)
+
+sum(rowData(rob)$feature_symbol %in% rowData(cengen)$feature_symbol)
+```
+
+```{r select-features-cengen}
+# had to increase virtual memory by making $HOME/.Renviron, and adding
+# R_MAX_VSIZE=100Gb
+cengen <- selectFeatures(cengen, suppress_plot = F)
+
+```
+```{r select-features-rob}
+rob <- selectFeatures(rob, suppress_plot = F)
+```
+```{r index-cluster-cengen}
+#load('sesh.data.RData')
+cengen <- cengen[, colData(cengen)$ident != "unassigned"]
+cengen <- scmap::indexCluster(cengen, cluster_col = "ident")
+```
+
+```{r index-cluster-rob}
+
+rob <- indexCluster(rob, cluster_col = "ident")
+```
+
+```{r project-rob-to-cengen}
+
+
+
+rob_to_cengen <- scmapCluster(
+  projection = rob,
+  index_list = list(
+    cengen = metadata(cengen)$scmap_cluster_index
+  )
+)
+
+cengen_to_rob <- scmapCluster(
+  projection = cengen,
+  index_list = list(
+    cengen = metadata(rob)$scmap_cluster_index
+  )
+)
+
+
+table(colData(rob)$ident, rob_to_cengen$scmap_cluster_labs)
+table(colData(cengen)$ident, cengen_to_rob$scmap_cluster_labs)
+```
