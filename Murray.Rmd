@@ -1,0 +1,97 @@
+---
+title: "Murray"
+author: "David C. King"
+date: "10/25/2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+library(Matrix) # for readMM (sparse matrix of counts)
+library(Seurat)
+library(dplyr)
+library(biomaRt)
+
+
+DATADIR="./murray_data"
+stopifnot(dir.exists(DATADIR))
+
+baseurl = "https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE126954"
+#                    https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE126954
+# download data from https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSM3618673 into DATADIR
+# you need:
+#  GSE126954_gene_by_cell_count_matrix.txt
+#  GSE126954_gene_annotation.csv
+#  GSE126954_cell_annotation.csv
+
+gene_by_cell_count_matrix_path = file.path(DATADIR, "GSE126954_gene_by_cell_count_matrix.txt.gz")
+gene_annotation_path = file.path(DATADIR, "GSE126954_gene_annotation.csv.gz")
+cell_annotation_path = file.path(DATADIR, "GSE126954_cell_annotation.csv.gz")
+
+
+gene_by_cell_count_matrix_url = 'https://www.ncbi.nlm.nih.gov/geo/download/?acc=GSE126954&format=file&file=GSE126954_gene_by_cell_count_matrix.txt.gz'
+gene_annotation_url = "https://www.ncbi.nlm.nih.gov/geo/download/?acc=GSE126954&format=file&file=GSE126954_gene_annotation.csv.gz"
+cell_annotation_url = "https://www.ncbi.nlm.nih.gov/geo/download/?acc=GSE126954&format=file&file=GSE126954_cell_annotation.csv.gz"
+
+if (TRUE) # download to DATADIR
+{
+  if (!file.exists(gene_by_cell_count_matrix_path)) {
+    download.file(gene_by_cell_count_matrix_url, gene_by_cell_count_matrix_path)
+  }
+  if (!file.exists(gene_annotation_path)) {
+    download.file(gene_annotation_url,gene_annotation_path)
+  }
+  if (!file.exists(cell_annotation_path)) {
+    download.file(cell_annotation_url,cell_annotation_path)
+  }
+}
+
+```
+
+```{r data}
+
+cell_annot = read.table(
+  gzfile(cell_annotation_path),
+  sep = ",",
+  header = T
+)
+# drop X, it is identical to "cell"
+cell_annot$X = NULL
+
+gene_annot = read.table(
+  gzfile(gene_annotation_path),
+  sep = ",",
+  header = T
+)
+# drop X, it is identical to "id"
+gene_annot$X = NULL
+```
+
+```{r data-count-matrix}
+glimpse(cell_annot)
+glimpse(gene_annot)
+#counts = readMM(file = file.path(DATADIR,"GSE126954_gene_by_cell_count_matrix.txt"))
+counts = readMM(gzfile(gene_by_cell_count_matrix_path))
+
+counts@Dimnames <- list(gene_annot$gene_short_name, cell_annot$cell)
+murray = CreateSeuratObject(counts)
+rm(counts)
+VlnPlot(murray, features = c("nFeature_RNA", "nCount_RNA"))
+```
+```{r mitochrondial-gene-filter}
+# get filternames from https://parasite.wormbase.org/biomart/martview
+mart <- useMart("parasite_mart", dataset = "wbps_gene", host = "https://parasite.wormbase.org", port = 443)
+genes.df <- getBM(mart = mart, 
+      filters = c("species_id_1010", "chromosome_name"),
+      value = list("caelegprjna13758", "MtDNA"),
+      attributes = c('wbps_gene_id','external_gene_id', 'chromosome_name')
+      )
+
+mitoList = genes.df[genes.df$chromosome_name == 'MtDNA','external_gene_id' ] # only 12
+genes.df$chromosome_name = NULL # free a little memory
+mitoIndices = which(rownames(murray) %in% mitoList)
+murray[["percent.mt"]] <- PercentageFeatureSet(murray, features = mitoIndices)
+VlnPlot(murray, features = c("nFeature_RNA", "nCount_RNA","percent.mt"))
+```
+

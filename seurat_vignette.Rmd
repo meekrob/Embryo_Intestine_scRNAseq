@@ -103,7 +103,8 @@ top10 <- head(VariableFeatures(pbmc), 10)
 # plot variable features with and without labels
 plot1 <- VariableFeaturePlot(pbmc)
 plot2 <- LabelPoints(plot = plot1, points = top10, repel = TRUE)
-plot1 + plot2
+#plot1 + 
+plot2
 ```
 # Normalization
 
@@ -134,7 +135,7 @@ DimPlot(pbmc, reduction = "pca")
 DimHeatmap(pbmc, dims = 1, cells = 500, balanced = TRUE)
 ```
 ```{r}
-DimHeatmap(pbmc, dims = 1:15, cells = 500, balanced = TRUE)
+DimHeatmap(pbmc, dims = 1:3, cells = 500, balanced = TRUE)
 ```
 # Determine dataset dimensionality
 
@@ -144,14 +145,17 @@ How many components shouldwe include? Use resampling test
 # NOTE: This process can take a long time for big datasets, comment out for expediency. More
 # approximate techniques such as those implemented in ElbowPlot() can be used to reduce
 # computation time
-pbmc <- JackStraw(pbmc, num.replicate = 100)
+system.time({
+pbmc <- JackStraw(pbmc, num.replicate = 100)}) #     user  system elapsed 
+                                               #  170.192   3.328 173.804 
 pbmc <- ScoreJackStraw(pbmc, dims = 1:20)
 ```
 
 The JackStrawPlot() function provides a visualization tool for comparing the distribution of p-values for each PC with a uniform distribution (dashed line). ‘Significant’ PCs will show a strong enrichment of features with low p-values (solid curve above the dashed line). 
 
 ```{r}
-JackStrawPlot(pbmc, dims = 1:15)
+dimis = 1:15
+JackStrawPlot(pbmc, dims = dimis[-10])
 ```
 A sharp drop-off in significance occurs after the first 10-12 PCs.
 
@@ -172,7 +176,7 @@ head(Idents(pbmc), 5)
 # Non-linear dimensional reduction (UMAP/tSNE)
 
 ```{r}
-pbmc <- RunUMAP(pbmc, dims = 1:10)
+pbmc <- RunUMAP(pbmc, dims = 1:10, seed.use=420)
 ```
 
 ```{r}

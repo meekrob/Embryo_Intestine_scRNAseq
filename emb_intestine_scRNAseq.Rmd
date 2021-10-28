@@ -33,12 +33,16 @@ emb_int.data <- Read10X_h5("./10x_cloud_analysis/GFPsort_pooled_count/raw_featur
 ```
 
 ```{r}
+# get filternames from https://parasite.wormbase.org/biomart/martview
 mart <- useMart("parasite_mart", dataset = "wbps_gene", host = "https://parasite.wormbase.org", port = 443)
 genes.df <- getBM(mart = mart, 
       filters = c("species_id_1010", "wbps_gene_id"),
       value = list("caelegprjna13758", rownames(emb_int.data)),
-      attributes = c('wbps_gene_id','external_gene_id')
+      attributes = c('wbps_gene_id','external_gene_id', 'chromosome_name')
       )
+
+mitoList = genes.df[genes.df$chromosome_name == 'MtDNA','external_gene_id' ] # only 12
+genes.df$chromosome_name = NULL # free a little memory
 
 c(nrow(genes.df), nrow(emb_int.data))
 # there are genes missing
@@ -86,27 +90,44 @@ head(emb_int@meta.data, 5)
 
 # TODO: Include mitochondria gene filtering
 
+```{r}
+mitoIndices = which(rownames(emb_int) %in% mitoList)
+emb_int[["percent.mt"]] <- PercentageFeatureSet(emb_int, features = mitoIndices)
+```
+
+
+
+
 - `nFeature_RNA` is the number of genes detected in each cell. 
 - nCount_RNA is the total number of molecules detected within a cell (AKA total UMIs per cell)
 - Low `nFeature_RNA` indicates that the cell may be dead or dying or an empty droplet. 
 - High `nCount_RNA` and/or `nFeature_RNA` indicates that the "cell" may in fact be a doublet (or multiplet).
 ```{r}
-VlnPlot(emb_int, features = c("nFeature_RNA", "nCount_RNA"))
+VlnPlot(emb_int, features = c("nFeature_RNA", "nCount_RNA","percent.mt"))
 ```
 
 ```{r}
-FeatureScatter(emb_int, feature1 = "nCount_RNA", feature2 = "nFeature_RNA")
+plot1 <- FeatureScatter(emb_int, feature1 = "nCount_RNA", feature2 = "percent.mt") + geom_hline(yintercept = 5)
+plot2 <- FeatureScatter(emb_int, feature1 = "nCount_RNA", feature2 = "nFeature_RNA")
+plot1 + plot2
 ```
 # Filter based on features
 
 ```{r}
 # emb_int <- CreateSeuratObject(counts = emb_int.data, project = "emb_int_pool", min.cells = 3, min.features = 200)
-emb_int <- subset(emb_int, subset = nFeature_RNA > 1000 & nFeature_RNA < 6000 & nCount_RNA < 50000)
+
+# cells being filtered due to mitochondrial percent:
+sum(emb_int$percent.mt < 5) / length(emb_int$percent.mt )
+length(emb_int$percent.mt )
+#emb_int_ <- subset(emb_int, subset = nFeature_RNA > 200 & nCount_RNA < 10000 & percent.mt < 12)
+
+emb_int <- subset(emb_int, subset = nFeature_RNA > 1000 & nFeature_RNA < 6000 & nCount_RNA < 50000 & percent.mt < 12)
+
 ```
 
 Visualize after filtering
 ```{r}
-VlnPlot(emb_int, features = c("nFeature_RNA", "nCount_RNA"))
+VlnPlot(emb_int, features = c("nFeature_RNA", "nCount_RNA", "percent.mt"))
 FeatureScatter(emb_int, feature1 = "nCount_RNA", feature2 = "nFeature_RNA")
 ```
 # Normalize the data
@@ -164,7 +185,7 @@ emb_int <- ScoreJackStraw(emb_int, dims = 1:20)
 ```
 
 ```{r}
-JackStrawPlot(emb_int, dims = 1:15)
+JackStrawPlot(emb_int, dims = 1:20)
 ```
 ```{r}
 ElbowPlot(emb_int)
@@ -172,13 +193,13 @@ ElbowPlot(emb_int)
 # Cell clustering
 Choosing 10 PCs
 ```{r}
-emb_int <- FindNeighbors(emb_int, dims = 1:10)
-emb_int <- FindClusters(emb_int, resolution = 0.5)
+emb_int <- FindNeighbors(emb_int, dims = 1:15)
+emb_int <- FindClusters(emb_int, resolution = 1)
 # Look at cluster IDs of the first 5 cells
 head(Idents(emb_int), 5)
 ```
 ```{r}
-emb_int <- RunUMAP(emb_int, dims = 1:10)
+emb_int <- RunUMAP(emb_int, dims = 1:15)
 DimPlot(emb_int, reduction = "umap", label = "TRUE", label.box = TRUE)
 ```
 
@@ -194,11 +215,22 @@ FeaturePlot(emb_int, features = c("elt-2", "elt-7","end-1", "ges-1","pho-1", "it
 ```
 ```{r}
 FeaturePlot(emb_int, features = c("ric-4", "ajm-1", "cdf-1", "myo-3", "myo-2", "unc-11", "inx-10"))
+FeaturePlot(emb_int, features = c("daf-2"))
 ```
 
 ```{r}
 print(emb_int[["pca"]], dims = 7, nfeatures = 5)
-FeaturePlot(emb_int, features = c("tba-2", "ctsa-1.2", "clec-37"))
+#FeaturePlot(emb_int, features = c("tba-2", "ctsa-1.2", "clec-37","daf-16"))
+FeaturePlot(emb_int, features = c('ptps-1', 'ceh-37', 'lys-8','Y32F6A.5', 'spp-8'))
+VlnPlot(emb_int, features = c('C14C6.5','F48G7.5'), log = TRUE)
+VlnPlot(emb_int, features = c('daf-2','daf-16'), log = TRUE)
+VlnPlot(emb_int, features = c('elt-7','elt-2','elt-4','pqm-1',"end-1","end-3"), log = TRUE)
+```
+```{r}
+# clecs
+
+clecs = grep("^clec.+", rownames(emb_int), "^clec.+",value=T) 
+FeaturePlot(emb_int, features = "percent.mt")
 ```
 # Find marker genes
 
@@ -215,10 +247,21 @@ FeaturePlot(emb_int, features = (
   slice_max(n = 1, order_by = avg_log2FC))$gene
   )
 ```
+```{r}
+emb_int.markers %>%
+    group_by(cluster) %>%
+    top_n(n = 5, wt = avg_log2FC) -> top10
+DoHeatmap(emb_int, features = top10$gene) + NoLegend()
+```
+
+```{r save-obj}
+saveRDS(emb_int, file="emb_int.rds")
+```
 # Perform gene ontology
 ```{r}
 library(reticulate)
-use_condaenv("kw_fig5", required = TRUE)
+#use_condaenv("kw_fig5", required = TRUE)
+#py_install("tissue_enrichment_analysis", pip = T)
 tea <- import("tissue_enrichment_analysis")
 tissue_df <- tea$fetch_dictionary("tissue")
 phenotype_df <- tea$fetch_dictionary("phenotype")
@@ -227,7 +270,9 @@ go_df <- tea$fetch_dictionary("go")
 
 ```{r}
 emb_int.markers <- emb_int.markers %>% left_join(genes.df, by = c("gene" = "external_gene_id")) 
-emb_int.markers <- emb_int.markers %>% rename(WBGeneID = wbps_gene_id)
+#emb_int.markers <- emb_int.markers %>% rename(WBGeneID = wbps_gene_id)
+# He tried to add a same-named column above. Error: Names must be unique. x These names are duplicated: * "WBGeneID" at locations 8 and 9.
+
 ```
 
 ```{r}
@@ -289,7 +334,7 @@ my_ontology_plot(my_tea_analysis(emb_int.markers %>% filter(p_val_adj < 0.05, av
 # Remove cluster 6 and 7
 
 ```{r}
-DimPlot(emb_int_subset, reduction = "pca")
+
 
 emb_int_subset <- CreateSeuratObject(counts = emb_int.data.filt, project = "emb_int_pool", min.cells = 3, min.features = 200)
 emb_int_subset <- subset(emb_int_subset, 
@@ -300,6 +345,11 @@ emb_int_subset <- FindVariableFeatures(emb_int_subset, selection.method = "vst",
 top10 <- head(VariableFeatures(emb_int_subset), 10)
 plot1 <- VariableFeaturePlot(emb_int_subset)
 LabelPoints(plot = plot1, points = top10, repel = TRUE)
+
+emb_int_subset <- RunPCA(emb_int_subset, features = VariableFeatures(object = emb_int_subset))
+
+#DimPlot(emb_int_subset, reduction = "pca")
+# Error: Cannot find 'pca' in this Seurat object
 ```
 
 ```{r}
