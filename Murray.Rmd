@@ -12,6 +12,7 @@ library(Matrix) # for readMM (sparse matrix of counts)
 library(Seurat)
 library(dplyr)
 library(biomaRt)
+library(ggplot2)
 
 
 DATADIR="./murray_data"
@@ -74,11 +75,18 @@ glimpse(gene_annot)
 #counts = readMM(file = file.path(DATADIR,"GSE126954_gene_by_cell_count_matrix.txt"))
 counts = readMM(gzfile(gene_by_cell_count_matrix_path))
 
-counts@Dimnames <- list(gene_annot$gene_short_name, cell_annot$cell)
-murray = CreateSeuratObject(counts)
-rm(counts)
+#counts@Dimnames <- list(gene_annot$gene_short_name, cell_annot$cell)
+# above just fucking stopped working
+colnames(counts) <- cell_annot$cell
+rownames(counts) <- gene_annot$gene_short_name
+murray = CreateSeuratObject(counts, project="Packer 2019", meta.data = cell_annot)
+#rm(counts)
+murray<-SetIdent(murray, value=cell_annot$cell.subtype)
+murray$cell.subtype = cell_annot$cell.subtype
 VlnPlot(murray, features = c("nFeature_RNA", "nCount_RNA"))
 ```
+
+
 ```{r mitochrondial-gene-filter}
 # get filternames from https://parasite.wormbase.org/biomart/martview
 mart <- useMart("parasite_mart", dataset = "wbps_gene", host = "https://parasite.wormbase.org", port = 443)
@@ -94,4 +102,99 @@ mitoIndices = which(rownames(murray) %in% mitoList)
 murray[["percent.mt"]] <- PercentageFeatureSet(murray, features = mitoIndices)
 VlnPlot(murray, features = c("nFeature_RNA", "nCount_RNA","percent.mt"))
 ```
+```{r rob-data}
+rob = readRDS("emb_int.rds")
+rob$source = "rob"
+rob$cell.subtype = factor(rob$seurat_clusters, levels=c(levels(rob$seurat_clusters),c("Intestine_middle_and_posterior", "Intestine_anterior","Intestine_far_posterior")))
 
+murray$source = "murray"
+murray$cell.subtype = factor(murray$cell.subtype, levels=c(unique(murray$cell.subtype),levels(rob$seurat_clusters)))
+
+
+#intestine$cell.subtype = factor(intestine$cell.subtype, levels=c(levels(rob$seurat_clusters),c("Intestine_middle_and_posterior", "Intestine_anterior","Intestine_far_posterior")))
+
+```
+
+```{r rob-to-non-intestine}
+non_intestine_idents = levels(murray$cell.subtype)[-grep("Intestine", levels(murray$cell.subtype))]
+
+# remove the added numeric clusters from this list so we don't request Rob's cluster cells from the murray data
+non_intestine_idents = non_intestine_idents[-grep("^[0-9]$", non_intestine_idents)]
+
+# NOTE!!!! this subsetting also remove 40523 NAs
+non_intestine = subset(murray, idents = non_intestine_idents)
+non_intestine$source = "Murray"
+non_intestine = NormalizeData(non_intestine)
+non_intestine = FindVariableFeatures(non_intestine, selection.method = "vst", nfeatures = 2000)
+
+non_intestine.anchors = FindIntegrationAnchors(object.list=list(rob=rob,murray=non_intestine), dim=1:30)
+non_intestine.integrated <- IntegrateData(anchorset = non_intestine.anchors, dims = 1:30)
+DefaultAssay(non_intestine.integrated) <- "integrated"
+non_intestine.integrated <- ScaleData(non_intestine.integrated, verbose = FALSE)
+non_intestine.integrated <- RunPCA(non_intestine.integrated, npcs = 30, verbose = FALSE)
+non_intestine.integrated <- RunUMAP(non_intestine.integrated, reduction = "pca", dims = 1:30, verbose = FALSE)
+```
+
+
+
+```{r plot-non-intestine-rob}
+p1 = DimPlot(non_intestine.integrated, reduction = "umap", group.by = "source", label = TRUE, repel = TRUE) + ggtitle("Rob:Murray Integration (non_intestine only)")
+p2 = DimPlot(non_intestine.integrated, reduction = "umap", group.by = "cell.subtype", label = TRUE, repel = TRUE) + ggtitle("clusters/cell subtype labelled")
+p1
+```
+
+```{r intestine}
+
+#intestine.barcodes = WhichCells(murray, idents = c("Intestine_middle_and_posterior", "Intestine_anterior","Intestine_far_posterior"))
+intestine = subset(murray, idents = c("Intestine_middle_and_posterior", "Intestine_anterior","Intestine_far_posterior"))
+# https://satijalab.org/seurat/articles/integration_mapping.html
+intestine$source = "Murray"
+intestine = NormalizeData(intestine)
+intestine = FindVariableFeatures(intestine, selection.method = "vst", nfeatures = 2000)
+
+
+#intestine$cell.subtype = factor(intestine$cell.subtype, levels=c(levels(rob$cell.subtype)))
+intestine.anchors = FindIntegrationAnchors(object.list=list(rob=rob,murray=intestine), dim=1:30)
+intestine.integrated <- IntegrateData(anchorset = intestine.anchors, dims = 1:30)
+
+
+DefaultAssay(intestine.integrated) <- "integrated"
+intestine.integrated <- ScaleData(intestine.integrated, verbose = FALSE)
+intestine.integrated <- RunPCA(intestine.integrated, npcs = 30, verbose = FALSE)
+intestine.integrated <- RunUMAP(intestine.integrated, reduction = "pca", dims = 1:30, verbose = FALSE)
+```
+
+
+```{r plot-umaps}
+p0 = DimPlot(rob, reduction = "umap", label = "TRUE", label.box = TRUE) + ggtitle("Rob data with 10 clusters")
+p1 = DimPlot(intestine.integrated, reduction = "umap", group.by = "source", label = TRUE, repel = TRUE) + ggtitle("Rob:Murray Integration (intestine only)")
+p2 = DimPlot(intestine.integrated, reduction = "umap", group.by = "cell.subtype", label = TRUE, repel = TRUE) + ggtitle("clusters/cell subtype labelled")
+#p3 = DimPlot(intestine.integrated, reduction = "umap", group.by = "cell.subtype", label = TRUE, repel = TRUE) + NoLegend()
+p0 + p1+ p2
+ggsave("integrated_umaps.pdf", width=20, height=7)
+```
+
+```{r rob-vs-whole-murray}
+murray = NormalizeData(murray)
+murray = FindVariableFeatures(murray, selection.method = "vst", nfeatures = 2000)
+
+# done in rob-data chunk now
+#murray$cell.subtype = factor(murray$cell.subtype, levels=c(unique(murray$cell.subtype),c("0",  "1",  "2",  "3",  "4",  "5",  "6",  "7",  "8",  "9")))
+
+
+
+wholeset.anchors = FindIntegrationAnchors(object.list=list(rob=rob,murray=murray), dim=1:30)
+wholeset.integrated <- IntegrateData(anchorset = wholeset.anchors, dims = 1:30)
+
+
+DefaultAssay(wholeset.integrated) <- "integrated"
+wholeset.integrated <- ScaleData(wholeset.integrated, verbose = FALSE)
+wholeset.integrated <- RunPCA(wholeset.integrated, npcs = 30, verbose = FALSE)
+wholeset.integrated <- RunUMAP(wholeset.integrated, reduction = "pca", dims = 1:30, verbose = FALSE)
+```
+
+```{r}
+p1=DimPlot(wholeset.integrated, reduction = "umap", group.by = "source", label = TRUE, repel = TRUE) + ggtitle("Rob:Murray Integration")
+p2=DimPlot(wholeset.integrated, reduction = "umap", group.by = "cell.subtype", label = TRUE, repel = TRUE) + ggtitle("clusters/cell subtype labelled")
+p1
+```
