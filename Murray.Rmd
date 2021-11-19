@@ -79,10 +79,14 @@ counts = readMM(gzfile(gene_by_cell_count_matrix_path))
 # above just fucking stopped working
 colnames(counts) <- cell_annot$cell
 rownames(counts) <- gene_annot$gene_short_name
-murray = CreateSeuratObject(counts, project="Packer 2019", meta.data = cell_annot)
+system.time({
+  murray = CreateSeuratObject(counts, project="Packer 2019", meta.data = cell_annot)
+  })  #   user  system elapsed 
+      # 18.322  11.663  34.657
 #rm(counts)
 murray<-SetIdent(murray, value=cell_annot$cell.subtype)
 murray$cell.subtype = cell_annot$cell.subtype
+murray$cell.type = cell_annot$cell.type
 VlnPlot(murray, features = c("nFeature_RNA", "nCount_RNA"))
 ```
 
@@ -102,13 +106,82 @@ mitoIndices = which(rownames(murray) %in% mitoList)
 murray[["percent.mt"]] <- PercentageFeatureSet(murray, features = mitoIndices)
 VlnPlot(murray, features = c("nFeature_RNA", "nCount_RNA","percent.mt"))
 ```
+
+```{r murray-intestine-subtype-markers}
+#c("Intestine_middle_and_posterior", "Intestine_anterior","Intestine_far_posterior")
+#rownames(murray) <- rownames(murray@assays$RNA@counts) # error?
+
+
+# all.genes = rownames(murray)
+# 
+# murray <- NormalizeData(murray, normalization.method = "LogNormalize", scale.factor = 10000)
+# system.time({
+#   murray = ScaleData(murray, features = all.genes, verbose = T)
+# }) #    user   system  elapsed 
+#    # 105.307  926.281 4854.311
+#    #                > 4854/60
+#    #                  [1] 80.9
+# 
+# murray = FindVariableFeatures(murray, selection.method = "vst", nfeatures = 2000)
+# VariableFeatures(murray) %>% head()
+# 
+# markers.far_posterior = FindMarkers(murray,  
+#                                     ident.1="Intestine_far_posterior",
+#                                     ident.2 = c("Intestine_middle_and_posterior",
+#                                                 "Intestine_anterior"))
+# markers.far_posterior$cell.subtype = "Intestine_far_posterior"
+# markers.far_posterior$gene = rownames(markers.far_posterior)
+# 
+# markers.middle_and_posterior = FindMarkers(murray, 
+#                                 ident.1="Intestine_middle_and_posterior",
+#                                 ident.2 = c("Intestine_far_posterior",
+#                                             "Intestine_anterior"))
+# 
+# markers.middle_and_posterior$cell.subtype = "Intestine_middle_and_posterior"
+# markers.middle_and_posterior$gene = rownames(markers.middle_and_posterior)
+# 
+# 
+# markers.anterior = FindMarkers(murray,  
+#                                ident.1="Intestine_anterior", 
+#                                ident.2 = c("Intestine_far_posterior",
+#                                            "Intestine_middle_and_posterior"))
+# markers.anterior$cell.subtype = "Intestine_anterior"
+# markers.anterior$gene = rownames(markers.anterior)
+# 
+# 
+# markers.intestine_subtypes = rbind(markers.anterior,markers.middle_and_posterior,markers.far_posterior)
+# markers.intestine_subtypes$gene = rownames(markers.intestine_subtypes)
+# 
+# markers.intestine_subtypes %>% group_by(cell.subtype) %>% top_n(n = 10, wt = avg_log2FC) -> top10
+# 
+# # need to run the intestine subset (currently below)
+# DoHeatmap(intestine, features = top10$gene) 
+# ggsave("murray_subintestine_markers.pdf", width=10, height=7)
+```
+
+
+
 ```{r rob-data}
 rob = readRDS("emb_int.rds")
 rob$source = "rob"
-rob$cell.subtype = factor(rob$seurat_clusters, levels=c(levels(rob$seurat_clusters),c("Intestine_middle_and_posterior", "Intestine_anterior","Intestine_far_posterior")))
-
 murray$source = "murray"
-murray$cell.subtype = factor(murray$cell.subtype, levels=c(unique(murray$cell.subtype),levels(rob$seurat_clusters)))
+
+rob$cell.subtype = factor(rob$seurat_clusters, 
+                          levels=c(levels(rob$seurat_clusters),
+                                   unique(murray$cell.subtype)))
+
+murray$cell.subtype = factor(murray$cell.subtype, 
+                             levels=c(unique(murray$cell.subtype),
+                                      levels(rob$seurat_clusters)))
+
+rob$cell.type = factor(rob$seurat_clusters, 
+                          levels=c(levels(rob$seurat_clusters),
+                                   unique(murray$cell.type)))
+
+
+murray$cell.type = factor(murray$cell.type, 
+                          levels=c(unique(murray$cell.type),
+                                   levels(rob$seurat_clusters)))
 
 
 #intestine$cell.subtype = factor(intestine$cell.subtype, levels=c(levels(rob$seurat_clusters),c("Intestine_middle_and_posterior", "Intestine_anterior","Intestine_far_posterior")))
@@ -150,18 +223,59 @@ intestine = subset(murray, idents = c("Intestine_middle_and_posterior", "Intesti
 # https://satijalab.org/seurat/articles/integration_mapping.html
 intestine$source = "Murray"
 intestine = NormalizeData(intestine)
+intestine = ScaleData(intestine, features = rownames(intestine))
 intestine = FindVariableFeatures(intestine, selection.method = "vst", nfeatures = 2000)
 
 
 #intestine$cell.subtype = factor(intestine$cell.subtype, levels=c(levels(rob$cell.subtype)))
-intestine.anchors = FindIntegrationAnchors(object.list=list(rob=rob,murray=intestine), dim=1:30)
-intestine.integrated <- IntegrateData(anchorset = intestine.anchors, dims = 1:30)
+# intestine.anchors = FindIntegrationAnchors(object.list=list(rob=rob,murray=intestine), dim=1:30)
+# intestine.integrated <- IntegrateData(anchorset = intestine.anchors, dims = 1:30)
+# 
+# 
+# DefaultAssay(intestine.integrated) <- "integrated"
+# intestine.integrated <- ScaleData(intestine.integrated, verbose = FALSE)
+# intestine.integrated <- RunPCA(intestine.integrated, npcs = 30, verbose = FALSE)
+# intestine.integrated <- RunUMAP(intestine.integrated, reduction = "pca", dims = 1:30, verbose = FALSE)
 
 
-DefaultAssay(intestine.integrated) <- "integrated"
-intestine.integrated <- ScaleData(intestine.integrated, verbose = FALSE)
-intestine.integrated <- RunPCA(intestine.integrated, npcs = 30, verbose = FALSE)
-intestine.integrated <- RunUMAP(intestine.integrated, reduction = "pca", dims = 1:30, verbose = FALSE)
+intestine <- RunPCA(intestine, npcs = 30, verbose = FALSE)
+markers.far_posterior = FindMarkers(intestine,
+                                    ident.1="Intestine_far_posterior",
+                                    ident.2 = c("Intestine_middle_and_posterior",
+                                                "Intestine_anterior"))
+markers.far_posterior$cell.subtype = "Intestine_far_posterior"
+markers.far_posterior$gene = rownames(markers.far_posterior)
+
+markers.middle_and_posterior = FindMarkers(intestine,
+                                ident.1="Intestine_middle_and_posterior",
+                                ident.2 = c("Intestine_far_posterior",
+                                            "Intestine_anterior"))
+
+markers.middle_and_posterior$cell.subtype = "Intestine_middle_and_posterior"
+markers.middle_and_posterior$gene = rownames(markers.middle_and_posterior)
+
+
+markers.anterior = FindMarkers(intestine,
+                               ident.1="Intestine_anterior",
+                               ident.2 = c("Intestine_far_posterior",
+                                           "Intestine_middle_and_posterior"))
+markers.anterior$cell.subtype = "Intestine_anterior"
+markers.anterior$gene = rownames(markers.anterior)
+
+
+markers.intestine_subtypes = rbind(markers.anterior,markers.middle_and_posterior,markers.far_posterior)
+
+markers.intestine_subtypes %>% group_by(cell.subtype) %>% top_n(n = 15, wt = avg_log2FC) -> top15
+
+markers.intestine_subtypes %>% group_by(cell.subtype) %>% filter(grepl("clec*",gene), p_val_adj < .01) %>% top_n(n=15, wt=avg_log2FC) -> top15clecs
+             
+# need to run the intestine subset (currently below)
+DoHeatmap(intestine, features = top15$gene,raster=F)
+ggsave("murray_subintestine_markers.pdf", width=10, height=7)
+
+DoHeatmap(intestine, features = top15clecs$gene,raster=F)
+ggsave("clec_murray_subintestine_markers.pdf", width=10, height=7)
+
 ```
 
 
@@ -191,10 +305,14 @@ DefaultAssay(wholeset.integrated) <- "integrated"
 wholeset.integrated <- ScaleData(wholeset.integrated, verbose = FALSE)
 wholeset.integrated <- RunPCA(wholeset.integrated, npcs = 30, verbose = FALSE)
 wholeset.integrated <- RunUMAP(wholeset.integrated, reduction = "pca", dims = 1:30, verbose = FALSE)
+
+p1=DimPlot(wholeset.integrated, reduction = "umap", group.by = "source", label = TRUE, repel = TRUE) + ggtitle("Rob:Murray Integration")
+p2=DimPlot(wholeset.integrated, reduction = "umap", group.by = "cell.type", label = TRUE, repel = TRUE) + ggtitle("clusters/cell subtype labelled")
+p2
 ```
 
 ```{r}
 p1=DimPlot(wholeset.integrated, reduction = "umap", group.by = "source", label = TRUE, repel = TRUE) + ggtitle("Rob:Murray Integration")
-p2=DimPlot(wholeset.integrated, reduction = "umap", group.by = "cell.subtype", label = TRUE, repel = TRUE) + ggtitle("clusters/cell subtype labelled")
-p1
+p2=DimPlot(wholeset.integrated, reduction = "umap", group.by = "cell.type", label = TRUE, repel = TRUE) + ggtitle("clusters/cell subtype labelled")
+p2
 ```
